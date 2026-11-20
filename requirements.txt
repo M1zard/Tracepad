@@ -1,0 +1,8 @@
+# TracePad 2.1.1 — зависимости для запуска из исходников
+# (сборка exe: pip install pyinstaller — см. README)
+
+PySide6>=6.6
+Pillow>=10.0
+
+# Linux/X11 только: клик-сквозь и глобальные хоткеи
+python-xlib; sys_platform == "linux"

@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Сборка PyInstaller/Nuitka ---
+build/
+dist/
+work/
+*.spec
+TracePad.exe
+TracePad/
+*.build/
+*.dist/
+*.onefile-build/
+*.bin
+0.1/
+0.2/
+
+# --- IDE/OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Мусор отладки ---
+*.log
+*.core
