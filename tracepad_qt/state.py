@@ -42,11 +42,14 @@ DEFAULTS = {
     "flip_y": False,
     "bw": False,
     "edge": False,
-    "edge_strength": 60,
+    "edge_strength": 50,         # 0..100 (edges.py: чувствительность)
     "grid_size": 48,
     "panel_x": None,
     "panel_y": None,
     "panel_collapsed": False,
+    # Auto Drawing
+    "draw_speed": "normal",     # slow | normal | fast
+    "draw_minlen": 8,            # px: штрихи короче не обводим
 }
 
 

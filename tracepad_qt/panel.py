@@ -31,8 +31,14 @@ class GlassPanel(QFrame):
     Почему: WA_TranslucentBackground (нужен для прозрачных окон)
     обнуляет QSS-фон — QSS background рисуется в window-слое, который
     translucency вырезает. Ручная отрисовка в paintEvent с
-    QColor(..., 240) даёт настоящее полупрозрачное стекло поверх
+    QColor(..., A) даёт настоящее полупрозрачное стекло поверх
     рабочего стола и работает одинаково на всех платформах.
+
+    Creative Pro + Glassmorphism: карточка 94% непрозрачности, тонкая
+    светлая кромка сверху («свет по краю стекла»), мягкая внутренняя
+    подсветка у верхнего края (индиго 6% — «студийная подсветка
+    стекла») и 1px-граница. Без блюра фона: он требует
+    композиции всего экрана под окно и на десктопе неоправдан.
     """
 
     def __init__(self):
@@ -42,20 +48,31 @@ class GlassPanel(QFrame):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
 
     def paintEvent(self, _e):
-        from PySide6.QtGui import QColor, QPainter, QPen
+        from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width() - 1, self.height() - 1
+        # тело стекла
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(22, 22, 31, 240))          # GLASS @ 94%
-        p.drawRoundedRect(0, 0, self.width() - 1, self.height() - 1,
-                          S.R_CARD, S.R_CARD)
-        # тонкая светлая кромка сверху («свет по краю стекла»)
-        pen = QPen(QColor(58, 58, 82, 200))
+        p.setBrush(QColor(21, 21, 31, 240))          # GLASS @ 94%
+        p.drawRoundedRect(0, 0, w, h, S.R_CARD, S.R_CARD)
+        # внутренняя подсветка верхнего края: индиго-градиент 8%->0
+        grad = QLinearGradient(0, 0, 0, 64)
+        grad.setColorAt(0.0, QColor(124, 108, 255, 22))
+        grad.setColorAt(1.0, QColor(124, 108, 255, 0))
+        p.setBrush(grad)
+        p.drawRoundedRect(1, 1, w - 2, 62, S.R_CARD - 1, S.R_CARD - 1)
+        # тонкая кромка «свет по краю стекла»
+        pen = QPen(QColor(84, 84, 118, 210))
         pen.setWidthF(1.0)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(0, 0, self.width() - 1, self.height() - 1,
-                          S.R_CARD, S.R_CARD)
+        p.drawRoundedRect(0, 0, w, h, S.R_CARD, S.R_CARD)
+        # граница QSS (STROKE) — для консистентности с остальным
+        pen2 = QPen(QColor(S.STROKE))
+        pen2.setWidthF(0.6)
+        p.setPen(pen2)
+        p.drawRoundedRect(1, 1, w - 2, h - 2, S.R_CARD - 1, S.R_CARD - 1)
         p.end()
 
 
@@ -256,10 +273,10 @@ class Panel(QWidget):
             self._rows[key] = row
 
         # под-настройки: контуры/сетка (раскрываются при вкл. режиме)
-        self._sub_edge = Slider(20, 160,
+        self._sub_edge = Slider(0, 100,
                                 int(self.state.get("edge_strength")),
                                 fmt=lambda v: "%d" % round(v), step=5,
-                                title="сила контуров")
+                                title="чувствительность")
         self._sub_edge.changed.connect(
             lambda v: self.state.set("edge_strength", int(v)))
         self._col_edge = self._wrap_collapser(self._sub_edge)
@@ -273,6 +290,30 @@ class Panel(QWidget):
             lambda v: self.state.set("grid_size", int(v)))
         self._col_grid = self._wrap_collapser(self._sub_grid)
         bl.addWidget(self._col_grid)
+
+        # ---------- авто-рисовка
+        self._sec("авто-рисовка", bl)
+        self._btn_draw = QPushButton("✎   Draw  ·  обвести контуры")
+        self._btn_draw.setObjectName("DrawButton")
+        self._btn_draw.setCursor(Qt.PointingHandCursor)
+        self._btn_draw.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        cmd = self.actions.get("draw")
+        if cmd:
+            self._btn_draw.clicked.connect(cmd)
+        bl.addWidget(self._btn_draw)
+        self._draw_status = QLabel("выбери чёрную кисть в редакторе под "
+                                    "референсом, потом Draw")
+        self._draw_status.setProperty("class", "dim")
+        self._draw_status.setWordWrap(True)
+        bl.addWidget(self._draw_status)
+        seg_speed = Segmented((0, 1, 2),
+                              1,
+                              labels=("точно", "обычно", "быстро"))
+        seg_speed.changed.connect(
+            lambda v: self.state.set(
+                "draw_speed", ("slow", "normal", "fast")[int(v)]))
+        self._seg_speed = seg_speed
+        bl.addWidget(seg_speed)
 
         # ---------- действия
         self._sec("действия", bl)
@@ -293,7 +334,8 @@ class Panel(QWidget):
 
         # подсказка
         hint = QLabel("Ctrl+Alt: T прозр. · G сетка · C сквозь · F/V флип · "
-                      "B ч/б · E контуры · R сброс · O открыть · H панель · Q выход")
+                      "B ч/б · E контуры · D рисовать · R сброс · O открыть · "
+                      "H панель · Q выход")
         hint.setProperty("class", "faint")
         hint.setWordWrap(True)
         bl.addWidget(hint)
@@ -382,6 +424,13 @@ class Panel(QWidget):
         for key, row in self._rows.items():
             row.set_checked(bool(st.get(key)))
         self.sync_subrows()
+
+    def set_draw_status(self, text):
+        """Статус авто-рисовки (строка под кнопкой Draw)."""
+        self._draw_status.setText(text)
+        running = text.startswith("рисую")
+        self._btn_draw.setText(
+            "■   Стоп  ·  Esc" if running else "✎   Draw  ·  обвести контуры")
 
     def set_filename(self, path):
         name = os.path.basename(path) if path else "нет картинки"

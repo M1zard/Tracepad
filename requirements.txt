@@ -1,8 +1,15 @@
-# TracePad 2.1.1 — зависимости для запуска из исходников
+# TracePad 2.2 — зависимости для запуска из исходников
 # (сборка exe: pip install pyinstaller — см. README)
 
 PySide6>=6.6
 Pillow>=10.0
+numpy>=1.26
 
-# Linux/X11 только: клик-сквозь и глобальные хоткеи
+# Детектор контуров и трассировка траекторий (edges.py/strokes.py)
+opencv-python>=4.8
+
+# Связность компонентов при гистерезисе контуров (edges.py)
+scipy>=1.10
+
+# Linux/X11 только: клик-сквозь, глобальные хоткеи, XTEST-автрисовка
 python-xlib; sys_platform == "linux"

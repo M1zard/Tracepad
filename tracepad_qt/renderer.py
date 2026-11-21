@@ -12,11 +12,21 @@
 Два качества рендера:
   final  — LANCZOS от кэша (после остановки взаимодействия);
   fast   — NEAREST (в движении: колесо, drag).
+
+Edge-режим (контуры) с версии 2.2 — edges.py: многоканальный
+детектор (Lab, NMS, гистерезис), 1px-маска раскрашивается в ч/б
+карту. Старый FIND_EDGES-эффект удалён: F1 0.04 против 0.96 (см.
+заголовок edges.py). Кэш edge-маски живёт отдельно от кэша
+bw-кадра: маска нужна и траекториям (Auto Drawing), а не только
+для показа.
 """
 
 from __future__ import annotations
 
-from PIL import Image, ImageOps, ImageFilter
+import numpy as np
+from PIL import Image, ImageOps
+
+from . import edges as E
 
 MAX_CACHE_PIXELS = 40_000_000
 
@@ -54,12 +64,16 @@ class RenderPipeline:
         self.orig = None                # исходная RGBA
         self._cache = None              # full-size после bw/edge
         self._cache_key = None
+        self._edge_mask = None          # 1px-маска контуров (edges.py)
+        self._edge_key = None
 
     # --- жизненный цикл -----------------------------------------------------
     def set_image(self, img: Image.Image):
         self.orig = img.convert("RGBA") if img.mode != "RGBA" else img
         self._cache = None
         self._cache_key = None
+        self._edge_mask = None
+        self._edge_key = None
 
     def has_image(self):
         return self.orig is not None
@@ -81,22 +95,49 @@ class RenderPipeline:
                                 max(1, int(base.height * k))),
                                Image.LANCZOS)
         img = base
-        if bw:
+        if bw and not edge:
             gray = ImageOps.grayscale(img.convert("RGB")).convert("RGB")
             img = Image.merge("RGBA", (*gray.split(), img.getchannel("A")))
         if edge:
-            gray = ImageOps.grayscale(img.convert("RGB"))
-            edges = gray.filter(ImageFilter.FIND_EDGES)
-            mask = edges.point(lambda v, t=int(strength):
-                               min(255, max(0, (v - t) * 3 + 40)))
-            mask = mask.filter(ImageFilter.MaxFilter(3))
-            img = Image.merge("RGBA", (
-                Image.new("L", img.size, 0),
-                Image.new("L", img.size, 0),
-                Image.new("L", img.size, 0),
-                mask))
+            # карта контуров edges.py: 1px-маска -> чёрные линии на
+            # прозрачном (та же семантика, что у старого режима).
+            # Маска может быть меньше кадра (MAX_DETECT_PIX в edges.py):
+            # линии растягиваем nearest-ом до полного размера — на 4K
+            # линии будут 2px, это читаемо и честно.
+            mask = self.edge_mask(strength)
+            if mask is not None and mask.any():
+                if mask.shape[1] != base.width or mask.shape[0] != base.height:
+                    mask = np.asarray(
+                        Image.fromarray(mask).resize(
+                            (base.width, base.height), Image.NEAREST))
+                img = E.mask_to_rgba(mask, color=(18, 20, 28, 255))
+            else:
+                img = Image.merge("RGBA", (
+                    Image.new("L", img.size, 0),
+                    Image.new("L", img.size, 0),
+                    Image.new("L", img.size, 0),
+                    Image.new("L", img.size, 0)))
         self._cache, self._cache_key = img, key
         return img
+
+    # --- карта контуров (общая для показа и Auto Drawing) -------------------
+    def edge_mask(self, strength=50):
+        """1px-маска контуров (numpy uint8), с кэшем по strength."""
+        if self.orig is None:
+            return None
+        key = (id(self.orig), int(strength))
+        if self._edge_key == key and self._edge_mask is not None:
+            return self._edge_mask
+        base = self.orig
+        if base.width * base.height > MAX_CACHE_PIXELS:
+            k = (MAX_CACHE_PIXELS / (base.width * base.height)) ** 0.5
+            base = base.resize((max(1, int(base.width * k)),
+                                max(1, int(base.height * k))),
+                               Image.LANCZOS)
+        rgb = np.asarray(base.convert("RGB"))
+        self._edge_mask = E.detect(rgb, int(strength))
+        self._edge_key = key
+        return self._edge_mask
 
     # --- кадр ------------------------------------------------------------------
     def render(self, zoom, bw=False, edge=False, edge_strength=60,

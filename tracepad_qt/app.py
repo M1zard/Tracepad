@@ -18,7 +18,7 @@ import collections
 import os
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QMenu
 
@@ -28,6 +28,8 @@ from . import style as S, winutil
 from .state import State
 from .overlay import OverlayWindow
 from .panel import Panel
+from . import strokes as ST
+from . import autodraw as AD
 
 
 class App:
@@ -68,6 +70,7 @@ class App:
             "fit": self.fit_to_screen,
             "hide": self.toggle_panel,
             "quit": self.quit,
+            "draw": self.draw_toggle,
         }, area)
 
         # подписки state -> реакции
@@ -104,6 +107,11 @@ class App:
         self._top_timer.timeout.connect(self._keep_on_top)
         self._top_timer.start()
         QTimer.singleShot(150, self._keep_on_top)
+
+        # Auto Drawing: исполнитель + обработка его событий СУЩЕСТВУЮЩИМ
+        # 80-мс таймером _poll (новых таймеров не заводим — они не нужны)
+        self.autodraw = AD.AutoDraw()
+        self._drawn_panel_hidden = False
 
         # стартовая загрузка (если картинки нет — ждём выбора
         # пользователя: диалог не открываем принудительно, панель живёт)
@@ -203,12 +211,106 @@ class App:
             self.toggle_panel()
         elif action == "open":
             self.open_image()
+        elif action == "draw":
+            self.draw_toggle()
         elif action == "quit":
             self.quit()
+
+    # ------------------------------------------------------------ auto draw
+    def draw_toggle(self):
+        """Кнопка Draw: идёт рисование — стоп; иначе — старт."""
+        if self.autodraw.is_running():
+            self.draw_stop()
+        else:
+            self.draw_start()
+
+    def draw_start(self):
+        """Запуск Auto Drawing.
+
+        Сценарий: редактор под оверлеем уже выбран пользователем,
+        кисть уже чёрная. Панель прячем на время рисования (курсор
+        ходит по экрану — панель не должна попасть под перо), после —
+        вернуть. Рисуем строго внутри bbox оверлея.
+        """
+        if not self.overlay.has_image():
+            self.panel.set_draw_status("сначала открой картинку")
+            return
+        if self.autodraw.is_running():
+            return
+        # контуры нужны как источник траекторий; включаем молча,
+        # если выключены (пользователь увидит их на подложке)
+        if not bool(self.state.get("edge")):
+            self.state.set("edge", True)
+            self.overlay.apply("final")
+        st = self.state
+        mask = self.overlay.pipeline.edge_mask(int(st.get("edge_strength")))
+        if mask is None or not mask.any():
+            self.panel.set_draw_status("контуры не найдены")
+            return
+        tr = ST.trace(mask, rdp_tol=0.75,
+                      min_points=int(st.get("draw_minlen")))
+        if not tr:
+            self.panel.set_draw_status("контуры не найдены")
+            return
+        tr = ST.order_strokes(tr)
+        # ВАЖНО: iw/ih — размер МАСКИ (она может быть даунскейлом
+        # оригинала для скорости, MAX_DETECT_PIX в edges.py); штрихи
+        # живут в координатах маски, и маппинг в окно обязан
+        # нормализоваться по ней, иначе траектории сместятся.
+        view = dict(
+            x=int(st.get("x")), y=int(st.get("y")),
+            w=self.overlay.width(), h=self.overlay.height(),
+            iw=mask.shape[1], ih=mask.shape[0],
+            flip_x=bool(st.get("flip_x")),
+            flip_y=bool(st.get("flip_y")))
+        plan = AD.make_plan(tr, view, str(st.get("draw_speed")))
+        # рисуем строго внутри bbox оверлея (не по чужому UI)
+        area = (view["x"], view["y"], view["w"], view["h"])
+        # спрятать панель (курсор её не должен задеть)
+        if not self.panel.is_hidden():
+            self.panel.hide_panel()
+            self._drawn_panel_hidden = True
+        ok = self.autodraw.start(plan, str(st.get("draw_speed")), area)
+        if ok:
+            self.panel.set_draw_status("рисую…  Esc/Draw — стоп")
+        else:
+            if self._drawn_panel_hidden:
+                self.panel.show_panel()
+                self._drawn_panel_hidden = False
+
+    def draw_stop(self):
+        self.autodraw.stop()
+
+    def _draw_event(self, ev):
+        """События исполнителя (уже в GUI-потоке — из _drain_hotkeys)."""
+        kind = ev[0]
+        if kind == "progress":
+            _, i, n = ev
+            self.panel.set_draw_status("рисую…  %d/%d" % (i + 1, n))
+        elif kind == "done":
+            _, interrupted, n = ev
+            why = self.autodraw._abort_reason
+            if interrupted and why:
+                self.panel.set_draw_status("остановлено: %s" % why)
+            elif interrupted:
+                self.panel.set_draw_status("остановлено")
+            else:
+                self.panel.set_draw_status("готово: %d штрихов" % n)
+            self._after_draw()
+        elif kind == "error":
+            self.panel.set_draw_status("ошибка: %s" % ev[1])
+            self._after_draw()
+
+    def _after_draw(self):
+        if self._drawn_panel_hidden:
+            self.panel.show_panel()
+            self._drawn_panel_hidden = False
 
     def _drain_hotkeys(self):
         while self.hk_queue:
             self.hotkey_action(self.hk_queue.popleft())
+        while self.autodraw.events:
+            self._draw_event(self.autodraw.events.popleft())
 
     def _keep_on_top(self):
         if self.overlay.isVisible():
@@ -253,6 +355,7 @@ class App:
                 ("Вписать в экран", self.fit_to_screen),
                 ("Сбросить вид", self.reset_view),
                 (None, None),
+                ("Авто-рисовка: Draw/стоп", self.draw_toggle),
                 ("Панель скрыть/показать", self.toggle_panel),
                 ("Выход", self.quit)):
             if label is None:
@@ -265,6 +368,7 @@ class App:
 
     # ---------------------------------------------------------------- quit
     def quit(self):
+        self.draw_stop()
         try:
             self._save_now()
         except Exception:
@@ -281,7 +385,23 @@ def main():
     app = QApplication(sys.argv if sys.argv else ["TracePad"])
     app.setStyleSheet(S.app_qss())
     app.setQuitOnLastWindowClosed(False)
-    App(app, image_path=(sys.argv[1] if len(sys.argv) > 1 else None))
+    a = App(app, image_path=(sys.argv[1] if len(sys.argv) > 1 else None))
+
+    # Esc — стоп автрисовки (глобальный фильтр: во время Draw фокус
+    # может быть у редактора ПОД оверлеем, наши окна клавиш не увидят)
+    from PySide6.QtCore import QEvent
+
+    class _EscFilter(QObject):
+        def eventFilter(self, obj, ev):
+            if (ev.type() == QEvent.KeyPress and
+                    ev.key() == Qt.Key_Escape and
+                    a.autodraw.is_running()):
+                a.draw_stop()
+                return True
+            return QObject.eventFilter(self, obj, ev)
+
+    filt = _EscFilter(app)
+    app.installEventFilter(filt)
     app.exec()
 
 

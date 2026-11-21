@@ -27,6 +27,7 @@ ACTIONS = {
     "t": "opacity", "g": "grid", "c": "click_through",
     "f": "flip_x", "v": "flip_y", "b": "bw", "e": "edge",
     "r": "reset", "h": "panel", "o": "open", "q": "quit",
+    "d": "draw",
 }
 
 
@@ -44,7 +45,7 @@ if IS_WIN:
 
     VK = {"t": 0x54, "g": 0x47, "c": 0x43, "f": 0x46, "v": 0x56,
           "b": 0x42, "e": 0x45, "r": 0x52, "h": 0x48, "o": 0x4F,
-          "q": 0x51}
+          "q": 0x51, "d": 0x44}
 
     class _MSG(ctypes.Structure):
         _fields_ = [("hwnd", wintypes.HWND), ("message", wintypes.UINT),
@@ -99,7 +100,8 @@ elif IS_LINUX:
         _CYR = {"t": "Cyrillic_e", "g": "Cyrillic_pe", "c": "Cyrillic_es",
                 "f": "Cyrillic_a", "v": "Cyrillic_em", "b": "Cyrillic_i",
                 "e": "Cyrillic_u", "r": "Cyrillic_ka", "h": "Cyrillic_er",
-                "q": "Cyrillic_shorti", "o": "Cyrillic_che"}
+                "q": "Cyrillic_shorti", "o": "Cyrillic_che",
+                "d": "Cyrillic_ve"}
 
         class Hotkeys(threading.Thread):
             EXTRA = (0, X.Mod2Mask, X.LockMask, X.Mod2Mask | X.LockMask)
